@@ -48,6 +48,18 @@ Não acrescente nada além do JSON.
 Email para análise: [email_aqui]
 """
 
+PROMPT_DE_REVISAO = """
+Você é um assistente de escrita profissional.
+Execute a ação solicitada no texto fornecido e retorne APENAS o texto modificado, sem explicações, saudações ou formatação extra.
+
+Ação: {ACAO}
+Texto Original:
+---
+{TEXTO}
+---
+
+Texto Modificado:
+"""
 
 @app.route('/api/classificar', methods=['POST'])
 def classificarEmail():
@@ -99,6 +111,35 @@ def classificarEmail():
             'resposta': f'Erro ao processar: {str(e)}'
         }), 500
 
+@app.route('/api/revisar', methods=['POST'])
+def revisarTexto():
+    dados = request.json
+    if not dados:
+        return jsonify({'error': 'Requisição deve conter JSON (verifique o Content-Type)'}), 400
+    
+    texto_original = dados.get('texto')
+    acao = dados.get('acao')
+
+    if not texto_original or not acao:
+        return jsonify({'error': 'As chaves "texto" e "acao" são obrigatórias.'}), 400
+    
+    print(f"Revisando texto: {texto_original} com ação: {acao[:50]}")
+
+    try:
+        promptFinal = PROMPT_DE_REVISAO.replace("{ACAO}", acao).replace("{TEXTO}", texto_original)
+        response = model.generate_content(promptFinal)
+
+        texto_revisado = response.text.strip()
+
+        print(f"Texto revisado pela IA: {texto_revisado[:50]}")
+
+        return jsonify({"texto_revisado": texto_revisado})
+
+    except Exception as e:
+        print(f"Erro ao revisar o texto: {e}")
+        return jsonify({
+            'error': f'Erro ao revisar o texto: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
