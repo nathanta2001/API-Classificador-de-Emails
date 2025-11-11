@@ -1,56 +1,78 @@
-from flask import Flask, jsonify, request
-from dotenv import load_dotenv
 import os
-import google.generativeai as genai
 import json
-from flask_cors import CORS
-import threading  
-import time       
+import time
+import threading
 import requests
+import google.generativeai as genai
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+from flask_cors import CORS
 
-# Carrega variáveis do arquivo .env
+
+# Carrega variáveis de ambiente
 load_dotenv()
-app = Flask(__name__)
-CORS(app)  # Para requisições externas
 
+# Inicializa a aplicação Flask
+app = Flask(__name__)
+
+# Configura o CORS pro frontend acessar a API
+CORS(app) 
+
+
+# --- Configuração da API de IA (Google Gemini) ---
 
 """
-Configuração da API Gemini. Certifique-se de definir a variável de ambiente
-GOOGLE_API_KEY com sua chave de API do Google Cloud antes de executar o aplicativo.
+Configura o cliente da API Gemini.
+É crucial que a variável de ambiente 'GOOGLE_API_KEY' esteja definida
+corretamente no seu ambiente de produção (Render).
 """
 try:
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise ValueError("A variável de ambiente GOOGLE_API_KEY não foi encontrada.")
+    
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-2.5-flash")
 
-except AttributeError as e:
-    print(f"Erro: {e}")
-    print("Erro: A variável de ambiente GOOGLE_API_KEY não foi encontrada.")
+except Exception as e:
+    print(f"Erro fatal ao configurar a API Gemini: {e}")
     exit()
 
 
-# Prompt principal usado para classificar e gerar resposta automática de emails
-PROMPT = """
-Você é um assistente especializado em classificação e resposta de emails. Sua tarefa é: (1) Classificar o email recebido como Produtivo ou Improdutivo, e (2) Gerar uma resposta automática apropriada à classificação.
+# --- Definição dos Prompts da IA ---
 
-Definições:
-Produtivo: O email exige ação, tomada de decisão ou resposta específica. Exemplos: dúvidas sobre sistema, solicitações de suporte, pedidos de status, envio de documentos, reclamações.
-Improdutivo: O email não exige ação ou resposta obrigatória. Exemplos: agradecimentos, mensagens motivacionais, cumprimentos, avisos informativos sem solicitação.
+"""
+Este prompt instrui a IA sobre o seu contexto (empresa financeira),
+as categorias (Produtivo, Improdutivo), exemplos e o formato de saída.
+"""
+PROMPT_DE_CLASSIFICACAO = """
+Você é um assistente de triagem de emails para uma GRANDE EMPRESA DO SETOR FINANCEIRO.
+O seu trabalho é classificar emails e sugerir respostas. Você deve ser rigoroso.
 
-Formato de Resposta (retorne exatamente em JSON):
-{
-"classificacao": "Produtivo ou Improdutivo",
-"resposta_automatica": "Texto da resposta sugerida ou vazio"
-}
+CATEGORIAS VÁLIDAS:
+1. "Produtivo": Emails que requerem uma ação da equipe.
+   - Exemplos: "não consigo acessar minha conta", "qual o status do meu caso 123?", "dúvidas sobre o sistema".
+   - Resposta Sugerida para Produtivo: "Obrigado, recebemos sua solicitação e nossa equipe irá analisar em breve."
 
-Regras:
-Se a classificação for Produtivo, gere uma resposta educada e direta, solicitando informações ou oferecendo solução.
-Se for Improdutivo, a resposta pode ser curta ou até vazia.
-Não inclua explicações fora do JSON.
-Não acrescente nada além do JSON.
+2. "Improdutivo": Emails que não necessitam de ação da equipe.
+   - Exemplos: "obrigado", "feliz natal", spam, newsletters, ou emails *completamente irrelevantes* para o negócio financeiro (ex: "quero um pastel", "olá").
+   - Resposta Sugerida para Improdutivo: "Obrigado pela sua mensagem!"
 
-Email para análise: [email_aqui]
+REGRAS DE FORMATAÇÃO:
+- Retorne APENAS um objeto JSON válido.
+- O JSON deve ter as chaves "categoria" e "resposta".
+- NUNCA deixe a chave "resposta" vazia, mesmo para emails improdutivos.
+
+Email para analisar:
+---
+{EMAIL_AQUI}
+---
 """
 
+"""
+Este prompt instrui a IA para atuar como um assistente de escrita,
+focando apenas em modificar o texto conforme a ação solicitada.
+"""
 PROMPT_DE_REVISAO = """
 Você é um assistente de escrita profissional.
 Execute a ação solicitada no texto fornecido e retorne APENAS o texto modificado, sem explicações, saudações ou formatação extra.
@@ -64,61 +86,82 @@ Texto Original:
 Texto Modificado:
 """
 
+
+# --- Endpoints da API ---
+
 @app.route('/api/classificar', methods=['POST'])
 def classificarEmail():
     """
-    Classifica o texto de um email como 'Produtivo' ou 'Improdutivo',
-    e retorna uma resposta gerada automaticamente.
-
-    Retorno:
-        JSON contendo:
-        - categoria (str): Classificação do email.
-        - resposta (str): Texto sugerido para resposta automática.
+    Endpoint da API para classificar o texto de um email.
+    
+    Espera um JSON de entrada: {"email_texto": "..."}
+    
+    Retorna um JSON de saída: {"categoria": "...", "resposta": "..."}
+    ou um JSON de erro: {"error": "..."}
     """
-
-    # Obtém o JSON enviado pelo frontend
+    
+    # Validação da entrada
     dados = request.json
     if not dados:
-        return jsonify({'error': 'Requisição deve conter JSON (verifique o Content-Type)'}), 400
+        return jsonify({'error': 'Requisição deve conter JSON'}), 400
 
-    # Extrai o texto do email
     texto_do_email = dados.get('email_texto')
     if not texto_do_email:
         return jsonify({'error': 'A chave "email_texto" é obrigatória.'}), 400
 
-    print(f"Email recebido: {texto_do_email}")
+    print(f"Recebido para classificar: {texto_do_email[:50]}...")
 
     try:
-        # Prepara o prompt para o modelo
-        promptFinal = PROMPT.replace("[email_aqui]", texto_do_email)
+        # Prepara e envia o prompt para o modelo Gemini
+        promptFinal = PROMPT_DE_CLASSIFICACAO.replace("{EMAIL_AQUI}", texto_do_email)
         response = model.generate_content(promptFinal)
 
-        # Limpeza do retorno da IA
         textoIA = response.text
+        print(f"IA (Classificar) retornou: {textoIA}")
+
+        # Limpa e valida a resposta da IA
+        if not textoIA.strip().startswith('{'):
+            raise Exception(f"A IA não retornou um JSON válido. Resposta: {textoIA}")
+            
         textoJson = textoIA.strip().replace("```json", "").replace("```", "").strip()
-
-        print(f"Resposta da IA: {textoJson}")
-
         resultadoJson = json.loads(textoJson)
 
-        # Retorno formatado para o frontend
+        categoria = resultadoJson.get("categoria")
+        resposta = resultadoJson.get("resposta")
+
+        if not categoria or not resposta:
+             raise Exception("O JSON da IA não contém as chaves 'categoria' ou 'resposta'.")
+
+        # Retorna a resposta formatada para o frontend
         return jsonify({
-            "categoria": resultadoJson.get("classificacao"),
-            "resposta": resultadoJson.get("resposta_automatica")
+            "categoria": categoria,
+            "resposta": resposta
         })
 
     except Exception as e:
         print(f"Erro ao processar o email: {e}")
+        # Retorna um erro que o frontend pode exibir
         return jsonify({
             'categoria': 'Erro',
-            'resposta': f'Erro ao processar: {str(e)}'
+            'resposta': f'Erro no servidor ao processar: {str(e)}'
         }), 500
+
 
 @app.route('/api/revisar', methods=['POST'])
 def revisarTexto():
+    """
+    Endpoint da API para revisar um texto com base numa ação.
+    
+    Espera um JSON de entrada: {"texto": "...", "acao": "..."}
+    
+    Retorna um JSON de saída: {"texto_revisado": "..."}
+    ou um JSON de erro: {"error": "..."}
+    """
+    
+    # Validação da entrada
     dados = request.json
     if not dados:
-        return jsonify({'error': 'Requisição deve conter JSON (verifique o Content-Type)'}), 400
+        return jsonify({'error': 'Requisição deve conter JSON'}), 400
     
     texto_original = dados.get('texto')
     acao = dados.get('acao')
@@ -126,29 +169,40 @@ def revisarTexto():
     if not texto_original or not acao:
         return jsonify({'error': 'As chaves "texto" e "acao" são obrigatórias.'}), 400
     
-    print(f"Revisando texto: {texto_original} com ação: {acao[:50]}")
+    print(f"Recebido para revisar (Ação: {acao}): {texto_original[:50]}...")
 
     try:
+        # Prepara e envia o prompt para o modelo Gemini
         promptFinal = PROMPT_DE_REVISAO.replace("{ACAO}", acao).replace("{TEXTO}", texto_original)
         response = model.generate_content(promptFinal)
 
         texto_revisado = response.text.strip()
-
-        print(f"Texto revisado pela IA: {texto_revisado[:50]}")
+        print(f"IA (Revisar) retornou: {texto_revisado[:50]}...")
 
         return jsonify({"texto_revisado": texto_revisado})
 
     except Exception as e:
         print(f"Erro ao revisar o texto: {e}")
-        return jsonify({
-            'error': f'Erro ao revisar o texto: {str(e)}'
-        }), 500
+        return jsonify({'error': f'Erro interno no servidor ao revisar: {str(e)}'}), 500
+
+
+# --- Bot "Keep-Alive" para o Render ---
 
 @app.route('/api/ping')
 def ping():
+    """
+    Endpoint usado pelo bot keep-alive para manter o servidor
+    do Render acordado. Apenas retorna um status 200.
+    """
     return jsonify({"status": "alive"}), 200
 
 def keep_alive_bot():
+    """
+    Função que corre numa thread separada.
+    A cada 14 minutos, ela "visita" a própria URL do servidor
+    para impedir que o serviço do Render durma.
+    """
+    # Espera 30s antes de começar, para o servidor arrancar
     time.sleep(30)
     print("Iniciando thread Keep-Alive.")
     
@@ -157,21 +211,26 @@ def keep_alive_bot():
             self_url = os.environ.get("RENDER_EXTERNAL_URL") 
             
             if self_url:
-
-                # requisição para o endpoint /api/ping
+                # Faz a requisição para o endpoint /api/ping
                 requests.get(f"{self_url}/api/ping")
                 print(f"Keep-Alive: Ping enviado para {self_url}/api/ping")
             
-            # Dorme por 14 min (15 min é tempo limite do Render)
+            # Dorme por 14 minutos (15 min é o tempo limite do Render)
             time.sleep(840)
         
         except Exception as e:
             print(f"Erro na thread Keep-Alive: {e}")
-
-            # se der erro espera 5 minutos e tenta de novo
+            # Se der erro (ex: falha de rede), espera 5 minutos e tenta de novo
             time.sleep(300)
 
+# Inicia a thread do bot. 'daemon=True' faz com que a thread
 threading.Thread(target=keep_alive_bot, daemon=True).start()
 
 if __name__ == '__main__':
+    """
+    Permite executar a aplicação localmente para desenvolvimento
+    usando o comando 'python app.py'.
+    O 'debug=True' faz o servidor reiniciar automaticamente
+    quando há alterações no código.
+    """
     app.run(debug=True, port=5000)
