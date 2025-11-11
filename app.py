@@ -4,6 +4,9 @@ import os
 import google.generativeai as genai
 import json
 from flask_cors import CORS
+import threading  
+import time       
+import requests
 
 # Carrega variáveis do arquivo .env
 load_dotenv()
@@ -140,6 +143,35 @@ def revisarTexto():
         return jsonify({
             'error': f'Erro ao revisar o texto: {str(e)}'
         }), 500
+
+@app.route('/api/ping')
+def ping():
+    return jsonify({"status": "alive"}), 200
+
+def keep_alive_bot():
+    time.sleep(30)
+    print("Iniciando thread Keep-Alive.")
+    
+    while True:
+        try:
+            self_url = os.environ.get("RENDER_EXTERNAL_URL") 
+            
+            if self_url:
+
+                # requisição para o endpoint /api/ping
+                requests.get(f"{self_url}/api/ping")
+                print(f"Keep-Alive: Ping enviado para {self_url}/api/ping")
+            
+            # Dorme por 14 min (15 min é tempo limite do Render)
+            time.sleep(840)
+        
+        except Exception as e:
+            print(f"Erro na thread Keep-Alive: {e}")
+
+            # se der erro espera 5 minutos e tenta de novo
+            time.sleep(300)
+
+threading.Thread(target=keep_alive_bot, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
