@@ -100,7 +100,6 @@ def classificarEmail():
     ou um JSON de erro: {"error": "..."}
     """
     
-    # Validação da entrada
     dados = request.json
     if not dados:
         return jsonify({'error': 'Requisição deve conter JSON'}), 400
@@ -112,18 +111,21 @@ def classificarEmail():
     print(f"Recebido para classificar: {texto_do_email[:50]}...")
 
     try:
-        # Prepara e envia o prompt para o modelo Gemini
         promptFinal = PROMPT_DE_CLASSIFICACAO.replace("{EMAIL_AQUI}", texto_do_email)
         response = model.generate_content(promptFinal)
 
         textoIA = response.text
         print(f"IA (Classificar) retornou: {textoIA}")
-
-        # Limpa e valida a resposta da IA
-        if not textoIA.strip().startswith('{'):
-            raise Exception(f"A IA não retornou um JSON válido. Resposta: {textoIA}")
-            
+        
+        # Limpa a resposta da IA, removendo backticks e espaços
         textoJson = textoIA.strip().replace("```json", "").replace("```", "").strip()
+
+        # Valida se a resposta limpa é um JSON
+        if not textoJson.startswith('{'):
+            # Se não for um JSON, lança um erro com a resposta limpa
+            raise Exception(f"A IA não retornou um JSON válido. Resposta limpa: {textoJson}")
+            
+        # Processa o JSON
         resultadoJson = json.loads(textoJson)
 
         categoria = resultadoJson.get("categoria")
@@ -132,7 +134,6 @@ def classificarEmail():
         if not categoria or not resposta:
              raise Exception("O JSON da IA não contém as chaves 'categoria' ou 'resposta'.")
 
-        # Retorna a resposta formatada para o frontend
         return jsonify({
             "categoria": categoria,
             "resposta": resposta
@@ -140,7 +141,6 @@ def classificarEmail():
 
     except Exception as e:
         print(f"Erro ao processar o email: {e}")
-        # Retorna um erro que o frontend pode exibir
         return jsonify({
             'categoria': 'Erro',
             'resposta': f'Erro no servidor ao processar: {str(e)}'
