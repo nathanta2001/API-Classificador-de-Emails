@@ -6,7 +6,7 @@ Uma API para a classificação e processamento de e-mails. Este projeto foi dese
 
 * **Runtime:** Node.js
 * **Linguagem:** TypeScript
-* **Framework:** Express / Fastify (ajuste conforme o que usou)
+* **Framework:** Express
 * **Validação:** Zod / Joi
 * **Documentação:** Swagger UI (OpenAPI)
 * **Testes:** Vitest / Jest
